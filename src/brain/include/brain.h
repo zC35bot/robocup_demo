@@ -48,6 +48,10 @@
 #include "locator.h"
 #include "robot_client.h"
 #include "visualization_publisher.h"
+#include "pos_predictor.h"
+#include "robot_frame_predictor.h"
+#include "head_controller.h"
+#include "training_logger.h"
 
 using namespace std;
 
@@ -137,6 +141,16 @@ public:
     void updateCostToKick();
 
     /**
+     * @brief Phase1: is field localization currently trustworthy enough to use the
+     * field-frame ball predictor / pred300 (spec §3.5). Simple time-based proxy:
+     * odom calibrated and last successful localize recent enough.
+     */
+    bool isLocalizationTrusted();
+
+    // Phase1: record the latest kick abort reason for training labeling.
+    inline void setKickAbort(uint8_t reason) { lastAbortReason_ = reason; }
+
+    /**
      * @brief Publish visualization markers (robot position, ball position, field lines, mark points)
      */
     void publishVisualizationMarkers();
@@ -224,6 +238,9 @@ private:
 
     void updateBallMemory();
 
+    // Phase1: advance predictors + write pred100/pred300 into BrainData + blackboard.
+    void updateBallPrediction();
+
     void updateRobotMemory();
 
     void updateObstacleMemory();
@@ -267,6 +284,9 @@ private:
 
     void logDebugInfo();
 
+    // Phase1: collect one training sample per tick (when training_logger enabled).
+    void logTrainingFrame();
+
 
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joySubscription;
     rclcpp::Subscription<game_controller_interface::msg::GameControlData>::SharedPtr gameControlSubscription;
@@ -293,6 +313,19 @@ private:
     void logStatusToConsole();
     string getComLogString(); 
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    // ------------------------------------------------------ Phase1 components ------------------------------------------------------
+    BallImmPredictor imm_predictor_;
+    RobotFramePredictor robot_frame_predictor_;
+    HeadController head_controller_;
+    TrainingLogger training_logger_;
+    rclcpp::Time lastBallPredictTime_;
+    int8_t lastKickResult_ = -1;     // post-labeled training signal
+    uint8_t lastAbortReason_ = 0;    // post-labeled training signal
+    // predictors are advanced in the tick thread and read for gating in the
+    // detection-callback thread; guard the shared state.
+    std::mutex predictorMutex_;
+    bool ballPredictorForceReset_ = false; // set by detection thread on re-acquire
 
     // ------------------------------------------------------ agent related ------------------------------------------------------
     // In agent mode, subscribe to parameter changes and handle callbacks

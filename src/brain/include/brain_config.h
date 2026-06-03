@@ -14,6 +14,59 @@ class Brain; // forward declaration
 
 using namespace std;
 
+/* ---------------- Phase1 parameter blocks (see spec §10) ---------------- */
+
+struct Phase1BallPredictorConfig {
+    double friction_decay_hz = 0.30;
+    double occlusion_noise_growth = 1.05;
+    int    max_occluded_frames = 50;
+    double ball_confidence_decay_rate = 0.92;
+    double gate_chi2_threshold = 5.99;
+    double jump_dist_m_per_frame = 0.40;
+    double localization_trust_msec = 1500.0;
+    double localization_trust_cov_max = 0.25;
+};
+
+struct Phase1ChaseConfig {
+    double predict_msec = 100.0;
+};
+
+struct Phase1KickConfig {
+    double abort_ball_move_dist_m = 0.15;
+    double abort_confidence = 0.35;
+    double abort_yaw_deg = 20.0;
+};
+
+struct Phase1KickSelectorConfig {
+    double abort_confidence = 0.25;
+    double adjust_yaw_deg = 15.0;
+    double rlvision_range_max_m = 0.40;
+    double rlvision_yaw_deg = 8.0;
+    double rlvision_conf_min = 0.50;
+};
+
+struct Phase1PowerShootConfig {
+    bool   enable = true;
+    double min_dist_to_goal_m = 1.5;
+    double max_dist_to_goal_m = 4.0;
+    double min_goal_angle_deg = 15.0;
+    double robot_stability_min = 0.8;
+};
+
+struct Phase1CooperationConfig {
+    double handover_margin_m = 0.30;
+    double lead_min_msec = 800.0;
+    double stale_threshold_ms = 500.0;
+};
+
+struct Phase1HeadControllerConfig {
+    bool enable = false;
+};
+
+struct Phase1TrainingLoggerConfig {
+    bool enable = false;
+};
+
 /**
  * Stores configuration values required by `Brain`. These values should be
  * determined at initialization and treated as read-only during decision-making.
@@ -104,9 +157,22 @@ public:
     string get_depth_image_topic();
     string get_depth_camera_info_topic();
 
-    FieldDimensions fieldDimensions; 
-    vector<FieldLine> mapLines;       
-    vector<MapMarking> mapMarkings;   
+    // Phase1 extra strategy flags
+    bool get_enable_shoot();
+
+    // Phase1 parameter blocks (populated in Brain::loadConfig)
+    Phase1BallPredictorConfig   ballPredictor;
+    Phase1ChaseConfig           chase;
+    Phase1KickConfig            kick;
+    Phase1KickSelectorConfig    kickSelector;
+    Phase1PowerShootConfig      powerShoot;
+    Phase1CooperationConfig     cooperation;
+    Phase1HeadControllerConfig  headController;
+    Phase1TrainingLoggerConfig  trainingLogger;
+
+    FieldDimensions fieldDimensions;
+    vector<FieldLine> mapLines;
+    vector<MapMarking> mapMarkings;
 
 
     int cameraImageWidth = 1280;

@@ -175,6 +175,23 @@ void VisionNode::Init(const std::string &cfg_template_path, const std::string &c
         segmentor_ = YoloV8Segmentor::CreateYoloV8Segmentor(node["segmentation_model"], segmentation_model_path);
     }
 
+    // Phase1 §8: configure the vision profiler (pure instrumentation).
+    {
+        VisionProfiler::Config pcfg;
+        if (node["vision_profiler"]) {
+            auto vp = node["vision_profiler"];
+            pcfg.alert_fps_min = as_or<double>(vp["alert_fps_min"], 40.0);
+            pcfg.alert_drop_rate_max = as_or<double>(vp["alert_drop_rate_max"], 2.0);
+            pcfg.alert_e2e_p95_ms_max = as_or<double>(vp["alert_e2e_p95_ms_max"], 20.0);
+            pcfg.alert_jitter_ms_max = as_or<double>(vp["alert_jitter_ms_max"], 5.0);
+            pcfg.report_every_n_frames = as_or<int>(vp["report_every_n_frames"], 100);
+            pcfg.enabled = as_or<bool>(vp["enable"], true);
+        }
+        profiler_.configure(pcfg);
+        std::cout << "vision_profiler enabled: " << pcfg.enabled
+                  << ", report_every_n_frames: " << pcfg.report_every_n_frames << std::endl;
+    }
+
     // add detector_ warmup
 
     // init data_syncer
@@ -303,6 +320,7 @@ void VisionNode::Init(const std::string &cfg_template_path, const std::string &c
 }
 
 void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg::Detections &detection_msg) {
+    if (profiler_.enabled()) { profiler_.frameStart(); profiler_.markReceiveDone(); }
     double timestamp = synced_data.color_data.timestamp;
     double depth_time_diff = (timestamp - synced_data.depth_data.timestamp) * 1000;
     double pose_time_diff = (timestamp - synced_data.pose_data.timestamp) * 1000;
@@ -321,6 +339,7 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
     } else {
         depth_float = depth;
     }
+    if (profiler_.enabled()) profiler_.markPreprocessDone();
 
     Pose p_head2base = synced_data.pose_data.data;
     Pose p_eye2base = p_head2base * p_headprime2head_ * p_eye2head_;
@@ -329,6 +348,7 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
 
     // inference
     auto detections = detector_->Inference(color);
+    if (profiler_.enabled()) profiler_.markInferenceDone();
     std::cout << detections.size() << " objects detected." << std::endl;
 
     auto get_estimator = [&](const std::string &class_name) {
@@ -441,9 +461,11 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
     }
 
     // sync-radar measurements
+    if (profiler_.enabled()) profiler_.markPostprocessDone();
 
     // publish msg
     detection_pub_->publish(detection_msg);
+    if (profiler_.enabled()) profiler_.markPublishDone();
     std::cout << std::endl;
 
     {

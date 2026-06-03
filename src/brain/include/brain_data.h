@@ -49,11 +49,24 @@ public:
     Eigen::Matrix4d camToRobot = Eigen::Matrix4d::Identity(); 
 
 
-    bool ballDetected = false;   
-    GameObject ball;              
-    GameObject tmBall;           
-    double robotBallAngleToField; 
+    bool ballDetected = false;
+    GameObject ball;
+    GameObject tmBall;
+    double robotBallAngleToField;
     bool lose_ball = false;
+
+    /* ----------- Phase1 ball prediction (see spec §3.4) ----------- */
+    double ballVel[2] = {0.0, 0.0};            // field-frame filtered velocity
+    double filtered_ball_field[2] = {0.0, 0.0};// field-frame filtered position (IMM)
+    double pred100_field[2] = {0.0, 0.0};      // 100ms prediction in field frame
+    double pred300_field[2] = {0.0, 0.0};      // 300ms prediction in field frame
+    double pred100_robot[2] = {0.0, 0.0};      // 100ms prediction in robot frame (fallback)
+    double ballModeProb[2] = {1.0, 0.0};       // [stationary, rolling]
+    bool   pred300_valid = false;
+    bool   using_field_frame = false;
+    bool   ball_prediction_valid = false;
+    double ball_confidence = 0.0;              // predictor confidence [0,1]
+    double tm_age_ms[HL_MAX_NUM_PLAYERS] = {0};// last received teammate packet age (ms)
 
     inline vector<GameObject> getRobots() const {
         std::lock_guard<std::mutex> lock(_robotsMutex);

@@ -102,4 +102,12 @@ calibration:
     reprojection_error: 3.5616553263245252
 misc:
   save_data_nonstationary: true
+# Phase1 §8: vision pipeline profiler (pure instrumentation)
+vision_profiler:
+  enable:                 true
+  alert_fps_min:          40.0
+  alert_drop_rate_max:    2.0
+  alert_e2e_p95_ms_max:   20.0
+  alert_jitter_ms_max:    5.0
+  report_every_n_frames:  100
 robot_name: "" # If there are multiple robots, specify the name, e.g., "robot0", "robot1", etc. Leave empty for a single robot

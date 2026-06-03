@@ -90,6 +90,41 @@ private:
 };
 
 
+/**
+ * Phase1 §6.5: rule-layer node inserted after StrikerDecide and before the kick
+ * actions. It refines the incoming decision into one of the executable decisions
+ * {find, chase, assist, adjust, kick, cross, auto_visual_kick, shoot, power_shoot}
+ * using BrainData / blackboard quantities. Ports串接 StrikerDecide via decision_in/out.
+ */
+class KickSelector : public SyncActionNode
+{
+public:
+    KickSelector(const string &name, const NodeConfig &config, Brain *_brain) : SyncActionNode(name, config), brain(_brain) {}
+
+    static PortsList providedPorts()
+    {
+        return {
+            InputPort<string>("decision_in", "", "Decision from StrikerDecide"),
+            OutputPort<string>("decision_out", "Refined decision"),
+        };
+    }
+
+    NodeStatus tick() override;
+
+private:
+    Brain *brain;
+
+    // Private helpers (kept out of Brain to avoid polluting the main class, §6.5).
+    bool ballInKickZone() const;
+    double kickAlignmentYawDeg() const;        // |kickDir - robotBallAngle| in degrees
+    bool isInShootWindow() const;
+    bool isPositionGoodForPowerShoot() const;
+    bool teammateInReceivePosition() const;
+    bool robotStable() const;
+    double distToOpponentGoal() const;
+};
+
+
 class GoalieDecide : public SyncActionNode
 {
 public:

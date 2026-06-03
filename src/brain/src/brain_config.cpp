@@ -154,6 +154,10 @@ double BrainConfig::get_ball_control_cost_threshold() {
 }
 
 
+bool BrainConfig::get_enable_shoot() {
+    return static_cast<rclcpp::Node*>(brain)->get_parameter_or("strategy.enable_shoot", false);
+}
+
 bool BrainConfig::get_enable_auto_visual_kick() {
     return static_cast<rclcpp::Node*>(brain)->get_parameter_or("RLVisionKick.enableAutoVisualKick", true);
 }

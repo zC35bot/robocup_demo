@@ -396,7 +396,10 @@ void BrainCommunication::unicastCommunication() {
         msg.thetaRb = brain->data->robotBallAngleToField;
         msg.cmdId = brain->data->tmMyCmdId;
         msg.cmd = brain->data->tmMyCmd;
-        log(format("ImAlive: %d, ImLead: %d, myCost: %.1f, myCmdId: %d, myCmd: %d", msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd));
+        // Phase1 §7.3: stamp send time + packet size.
+        msg.timestamp_ms = static_cast<uint64_t>(brain->get_clock()->now().nanoseconds() / 1000000);
+        msg.packet_size = static_cast<int>(sizeof(TeamCommunicationMsg));
+        log(format("ImAlive: %d, ImLead: %d, myCost: %.1f, myCmdId: %d, myCmd: %d, packet_size: %d", msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd, msg.packet_size));
 
         std::lock_guard<std::mutex> lock(_teammate_addresses_mutex);
         for (auto it = _teammate_addresses.begin(); it != _teammate_addresses.end(); ++it) {
@@ -532,7 +535,19 @@ void BrainCommunication::spinCommunicationReceiver() {
             continue;
         }
 
-        log(format("TMID: %.d, alive: %d, lead: %d, cost: %.1f, CmdId: %d, Cmd: %d", msg.playerId, msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd));
+        // Phase1 §7.3: compute packet age and stale-reject.
+        uint64_t now_ms = static_cast<uint64_t>(brain->get_clock()->now().nanoseconds() / 1000000);
+        int64_t age_ms = static_cast<int64_t>(now_ms) - static_cast<int64_t>(msg.timestamp_ms);
+        if (age_ms < 0) age_ms = 0; // cross-machine clock skew guard
+        brain->data->tm_age_ms[tmIdx] = static_cast<double>(age_ms);
+        brain->log->log_scalar("tm_age", format("tm_age_ms_%d", msg.playerId), static_cast<double>(age_ms));
+        double staleThr = brain->config->cooperation.stale_threshold_ms;
+        if (msg.timestamp_ms != 0 && static_cast<double>(age_ms) > staleThr) {
+            log(format("stale-reject TM %d: age %ld ms > %.0f ms (packet_size %d)", msg.playerId, age_ms, staleThr, msg.packet_size));
+            continue; // do not update this teammate's state
+        }
+
+        log(format("TMID: %.d, alive: %d, lead: %d, cost: %.1f, CmdId: %d, Cmd: %d, age: %ld ms", msg.playerId, msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd, age_ms));
 
         TMStatus &tmStatus = brain->data->tmStatus[tmIdx];
         

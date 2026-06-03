@@ -36,6 +36,7 @@ void BrainTree::init()
     REGISTER_BUILDER(StandStill)
     REGISTER_BUILDER(CalcKickDir)
     REGISTER_BUILDER(StrikerDecide)
+    REGISTER_BUILDER(KickSelector)
     REGISTER_BUILDER(CamTrackBall)
     REGISTER_BUILDER(CamFindBall)
     REGISTER_BUILDER(CamFastScan)
@@ -103,6 +104,11 @@ void BrainTree::initEntry()
     setEntry<bool>("we_just_scored", false);
     setEntry<bool>("wait_for_opponent_kickoff", false);
 
+    // Phase1 ball prediction blackboard entries
+    setEntry<bool>("pred300_valid", false);
+    setEntry<bool>("using_field_frame", false);
+    setEntry<bool>("ball_prediction_valid", false);
+
     // Automatic vision calibration related
     setEntry<string>("calibrate_state", "pitch");
     setEntry<double>("calibrate_pitch_center", 0.0);
@@ -141,6 +147,10 @@ NodeStatus StepOnSpot::tick()
 
 NodeStatus CamTrackBall::tick()
 {
+    // Phase1 §5: when HeadController takes over head control, the BT cam nodes
+    // must not also drive the head (avoid double下发冲突).
+    if (brain->config->headController.enable) return NodeStatus::SUCCESS;
+
     double pitch, yaw, ballX, ballY, deltaX, deltaY;
     const double pixToleranceX = brain->config->cameraImageWidth * 3 / 10.; // If the pixel difference between the ball and the center of the field of view is less than this tolerance, it is considered to be at the center of the field of view.
     const double pixToleranceY = brain->config->cameraImageHeight * 3 / 10.;
@@ -218,6 +228,8 @@ CamFindBall::CamFindBall(const string &name, const NodeConfig &config, Brain *_b
 
 NodeStatus CamFindBall::tick()
 {
+    if (brain->config->headController.enable) return NodeStatus::SUCCESS; // Phase1 §5 takeover
+
     if (brain->data->ballDetected)
     {
         return NodeStatus::SUCCESS;
@@ -245,6 +257,8 @@ NodeStatus CamFindBall::tick()
 
 NodeStatus CamScanField::tick()
 {
+    if (brain->config->headController.enable) return NodeStatus::SUCCESS; // Phase1 §5 takeover
+
     auto sec = brain->get_clock()->now().seconds();
     auto msec = static_cast<unsigned long long>(sec * 1000);
     double lowPitch, highPitch, leftYaw, rightYaw;
@@ -287,15 +301,38 @@ NodeStatus Chase::tick()
         vxLimit = min(brain->config->get_near_ball_speed_limit(), vxLimit);
     }
 
-    double ballRange = brain->data->ball.range;
-    double ballYaw = brain->data->ball.yawToRobot;
+    // Phase1 §6.2: chase the predicted ball position (pred100) to compensate
+    // vision+control latency. Use the field-frame pred when localization is
+    // trusted, otherwise the robot-frame fallback pred; fall back to the raw
+    // ball when no prediction is available.
+    Point2D predBallField;
+    bool usePred = brain->data->ball_prediction_valid;
+    if (usePred && brain->data->using_field_frame) {
+        predBallField.x = brain->data->pred100_field[0];
+        predBallField.y = brain->data->pred100_field[1];
+    } else if (usePred) {
+        Pose2D pr; pr.x = brain->data->pred100_robot[0]; pr.y = brain->data->pred100_robot[1]; pr.theta = 0;
+        Pose2D pf = brain->data->robot2field(pr);
+        predBallField.x = pf.x;
+        predBallField.y = pf.y;
+    } else {
+        predBallField.x = brain->data->ball.posToField.x;
+        predBallField.y = brain->data->ball.posToField.y;
+    }
+
+    Pose2D predBallRobot = brain->data->field2robot({predBallField.x, predBallField.y, 0});
+    double ballRange = norm(predBallRobot.x, predBallRobot.y);
+    double ballYaw = atan2(predBallRobot.y, predBallRobot.x);
     double kickDir = brain->data->kickDir;
     double theta_br = atan2(
-        brain->data->robotPoseToField.y - brain->data->ball.posToField.y,
-        brain->data->robotPoseToField.x - brain->data->ball.posToField.x
+        brain->data->robotPoseToField.y - predBallField.y,
+        brain->data->robotPoseToField.x - predBallField.x
     );
-    double theta_rb = brain->data->robotBallAngleToField;
-    auto ballPos = brain->data->ball.posToField;
+    double theta_rb = atan2(
+        predBallField.y - brain->data->robotPoseToField.y,
+        predBallField.x - brain->data->robotPoseToField.x
+    );
+    Point2D ballPos = predBallField;
 
 
     double vx, vy, vtheta;
@@ -671,10 +708,25 @@ NodeStatus Adjust::tick()
 
     double vx = 0, vy = 0, vtheta = 0;
     double kickDir = brain->data->kickDir;
-    double dir_rb_f = brain->data->robotBallAngleToField; 
+
+    // Phase1 §6.3: when the field-frame 300ms prediction is valid, adjust toward
+    // the predicted ball position; otherwise fall back to the live ball.
+    double dir_rb_f, ballRange, ballYaw;
+    bool usePred300 = brain->tree->getEntry<bool>("pred300_valid") && brain->data->using_field_frame;
+    if (usePred300) {
+        Point2D refField{brain->data->pred300_field[0], brain->data->pred300_field[1]};
+        Pose2D refRobot = brain->data->field2robot({refField.x, refField.y, 0});
+        ballRange = norm(refRobot.x, refRobot.y);
+        ballYaw = atan2(refRobot.y, refRobot.x);
+        dir_rb_f = atan2(refField.y - brain->data->robotPoseToField.y,
+                         refField.x - brain->data->robotPoseToField.x);
+        log("using pred300 target");
+    } else {
+        dir_rb_f = brain->data->robotBallAngleToField;
+        ballRange = brain->data->ball.range;
+        ballYaw = brain->data->ball.yawToRobot;
+    }
     double deltaDir = toPInPI(kickDir - dir_rb_f);
-    double ballRange = brain->data->ball.range;
-    double ballYaw = brain->data->ball.yawToRobot;
     double st = st_far; 
     double R = ballRange; 
     double r = range;
@@ -873,6 +925,124 @@ NodeStatus StrikerDecide::tick() {
     return NodeStatus::SUCCESS;
 }
 
+// ----------------------------- KickSelector (§6.5) ---------------------------
+
+double KickSelector::distToOpponentGoal() const {
+    double gx = brain->config->fieldDimensions.length / 2.0;
+    double gy = 0.0;
+    return norm(brain->data->ball.posToField.x - gx, brain->data->ball.posToField.y - gy);
+}
+
+bool KickSelector::ballInKickZone() const {
+    // Ball close in front of the robot and within reasonable field bounds.
+    auto &ball = brain->data->ball;
+    if (ball.range > 1.5) return false;
+    if (fabs(ball.yawToRobot) > M_PI / 2.0) return false;
+    double L = brain->config->fieldDimensions.length;
+    double Wd = brain->config->fieldDimensions.width;
+    if (fabs(ball.posToField.x) > L / 2 + 0.5) return false;
+    if (fabs(ball.posToField.y) > Wd / 2 + 0.5) return false;
+    return true;
+}
+
+double KickSelector::kickAlignmentYawDeg() const {
+    double delta = toPInPI(brain->data->kickDir - brain->data->robotBallAngleToField);
+    return fabs(rad2deg(delta));
+}
+
+bool KickSelector::isInShootWindow() const {
+    // Aligned for a shot and not too far from the opponent goal.
+    if (!brain->isAngleGood(0.3, "shoot")) return false;
+    return distToOpponentGoal() < brain->config->powerShoot.max_dist_to_goal_m;
+}
+
+bool KickSelector::isPositionGoodForPowerShoot() const {
+    double d = distToOpponentGoal();
+    if (d < brain->config->powerShoot.min_dist_to_goal_m) return false;
+    if (d > brain->config->powerShoot.max_dist_to_goal_m) return false;
+    auto angles = brain->getGoalPostAngles(0.0); // [theta_l, theta_r]
+    double goalAngleDeg = fabs(rad2deg(angles[0] - angles[1]));
+    if (goalAngleDeg < brain->config->powerShoot.min_goal_angle_deg) return false;
+    return true;
+}
+
+bool KickSelector::robotStable() const {
+    double stability = (brain->data->recoveryState == RobotRecoveryState::IS_READY) ? 1.0 : 0.0;
+    return stability >= brain->config->powerShoot.robot_stability_min;
+}
+
+bool KickSelector::teammateInReceivePosition() const {
+    // A teammate is ahead (toward opponent goal) of the ball and roughly along
+    // the cross direction, within a sensible range.
+    int selfIdx = brain->config->get_player_id() - 1;
+    double kickDir = brain->data->kickDir;
+    auto ballPos = brain->data->ball.posToField;
+    for (int i = 0; i < HL_MAX_NUM_PLAYERS; i++) {
+        if (i == selfIdx) continue;
+        auto &tm = brain->data->tmStatus[i];
+        if (!tm.isAlive) continue;
+        double dx = tm.robotPoseToField.x - ballPos.x;
+        double dy = tm.robotPoseToField.y - ballPos.y;
+        double dist = norm(dx, dy);
+        if (dist < 0.5 || dist > 6.0) continue;
+        double dirToTm = atan2(dy, dx);
+        if (fabs(toPInPI(dirToTm - kickDir)) < deg2rad(40.0)) return true;
+    }
+    return false;
+}
+
+NodeStatus KickSelector::tick() {
+    auto log = [=](string msg) { brain->log->debug("kick_selector", msg); };
+
+    string decisionIn;
+    getInput("decision_in", decisionIn);
+
+    // Pass-through for non-kick decisions; KickSelector only refines near-ball play.
+    if (decisionIn == "find" || decisionIn == "chase" || decisionIn == "assist" || decisionIn == "") {
+        setOutput("decision_out", decisionIn);
+        return NodeStatus::SUCCESS;
+    }
+
+    const auto &ks = brain->config->kickSelector;
+    bool pred300Valid = brain->tree->getEntry<bool>("pred300_valid");
+    bool predValid = brain->tree->getEntry<bool>("ball_prediction_valid");
+    double yawDeg = kickAlignmentYawDeg();
+    double conf = brain->data->ball_confidence;
+    bool hasFallen = (brain->data->recoveryState == RobotRecoveryState::HAS_FALLEN);
+
+    string out;
+
+    if (conf < ks.abort_confidence || hasFallen) {
+        // 1. abort -> chase
+        out = "chase";
+    } else if (!pred300Valid || yawDeg > ks.adjust_yaw_deg || !ballInKickZone()) {
+        // 2. adjust
+        out = "adjust";
+    } else if (
+        // 3. auto_visual_kick (RL vision kick) — all gates must pass
+        brain->config->get_enable_auto_visual_kick() && brain->data->tmImLead && brain->data->tmMyCostRank == 0 && predValid && !brain->tree->getEntry<bool>("ball_out") && !brain->data->lose_ball && brain->data->ball.range < ks.rlvision_range_max_m && yawDeg < ks.rlvision_yaw_deg && conf > ks.rlvision_conf_min && fabs(brain->data->ball.posToField.x) < brain->config->fieldDimensions.length / 2 + 0.5 && fabs(brain->data->ball.posToField.y) < brain->config->fieldDimensions.width / 2 + 0.5) {
+        out = "auto_visual_kick";
+        brain->data->tmImInVisualKick = true;
+    } else if (brain->config->get_enable_shoot() && isInShootWindow()) {
+        // 4. shoot
+        out = "shoot";
+    } else if (brain->config->powerShoot.enable && isPositionGoodForPowerShoot() && robotStable()) {
+        // 5. power_shoot
+        out = "power_shoot";
+    } else if (!brain->data->tmImLead && brain->data->kickType == "cross" && teammateInReceivePosition()) {
+        // 6. cross
+        out = "cross";
+    } else {
+        // 7. kick (default)
+        out = "kick";
+    }
+
+    log(format("in=%s out=%s pred300=%d yaw=%.1f conf=%.2f", decisionIn.c_str(), out.c_str(), pred300Valid, yawDeg, conf));
+    setOutput("decision_out", out);
+    brain->visualizer->publishPlayerDecision(format("striker-%s", out.c_str()));
+    return NodeStatus::SUCCESS;
+}
+
 NodeStatus GoalieDecide::tick()
 {
 
@@ -1012,17 +1182,38 @@ NodeStatus Kick::onRunning()
 
     bool enableAbort = brain->config->get_abort_kick_when_ball_moved();
     auto ballRange = brain->data->ball.range;
-    const double MOVE_RANGE_THRESHOLD = 0.3;
-    const double BALL_LOST_THRESHOLD = 1000;  
+    const double MOVE_RANGE_THRESHOLD = brain->config->kick.abort_ball_move_dist_m; // §6.4 ball_moved_abort
+    const double BALL_LOST_THRESHOLD = 1000;
     if (
-        enableAbort 
+        enableAbort
         && (
-            (brain->data->ballDetected && ballRange - _minRange > MOVE_RANGE_THRESHOLD) 
-            || brain->msecsSince(brain->data->ball.timePoint) > BALL_LOST_THRESHOLD 
+            (brain->data->ballDetected && ballRange - _minRange > MOVE_RANGE_THRESHOLD)
+            || brain->msecsSince(brain->data->ball.timePoint) > BALL_LOST_THRESHOLD
         )
     ) {
         log("ball moved, abort kick");
+        brain->setKickAbort(1);
         return NodeStatus::SUCCESS;
+    }
+
+    // Phase1 §6.4: additional multi-dimensional aborts (any -> back to Chase).
+    {
+        double abortYaw = deg2rad(brain->config->kick.abort_yaw_deg);
+        if (brain->data->recoveryState == RobotRecoveryState::HAS_FALLEN) { // fall_abort (fixed)
+            log("fall, abort kick");
+            brain->setKickAbort(3);
+            return NodeStatus::SUCCESS;
+        }
+        if (brain->data->ball_confidence < brain->config->kick.abort_confidence) { // confidence_abort
+            log("low confidence, abort kick");
+            brain->setKickAbort(2);
+            return NodeStatus::SUCCESS;
+        }
+        if (brain->data->ballDetected && fabs(brain->data->ball.yawToRobot) > abortYaw) { // yaw_abort
+            log("yaw too large, abort kick");
+            brain->setKickAbort(4);
+            return NodeStatus::SUCCESS;
+        }
     }
 
 

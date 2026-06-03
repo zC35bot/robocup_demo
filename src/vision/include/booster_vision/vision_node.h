@@ -23,6 +23,7 @@
 #include "booster_vision/base/pose.h"
 
 #include "booster_vision/color_classifier.hpp"
+#include "booster_vision/vision_profiler.h"
 
 namespace booster_vision {
 
@@ -126,6 +127,8 @@ private:
     std::map<std::string, std::shared_ptr<PoseEstimator>> pose_estimator_map_;
     
     YAML::Node config_node_;  // Store config for recreating pose estimators
+
+    VisionProfiler profiler_; // Phase1 §8: pipeline timing instrumentation
 };
 
 } // namespace booster_vision
