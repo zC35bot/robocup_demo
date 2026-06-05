@@ -1,0 +1,18 @@
+/* Mermaid 图表：居中显示，放大到内容列宽（封顶不溢出），并防止底部最后一行被裁切 */
+.vp-doc .mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0;
+  overflow: visible;
+}
+
+/* 配合 config 里的 useMaxWidth:false（mermaid 输出精确像素 width/height）：
+   width:100% 把图放大到列宽、max-width 封顶，height:auto 按真实宽高比缩放，
+   不会出现"放大后 viewBox 偏短导致最后一行被裁"的问题。 */
+.vp-doc .mermaid svg {
+  width: 100%;
+  max-width: 820px;
+  height: auto;
+  /* 保险：即使个别图边缘略超，也只是可见溢出而非裁切 */
+  overflow: visible;
+}

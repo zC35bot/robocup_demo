@@ -10,3 +10,9 @@ build_image
 build_ros2
 dist
 .DS_Store
+
+# Node / VitePress 文档站
+node_modules
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/.vitepress/.temp
