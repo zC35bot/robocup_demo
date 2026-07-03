@@ -283,7 +283,16 @@ NodeStatus Chase::tick()
         brain->log->debug("Chase4", msg);
     };
     log("ticked");
-    
+
+    if (
+        !brain->tree->getEntry<bool>("ball_location_known")
+        || brain->isBallOut(3.0, 1.5)
+    )
+    {
+        brain->client->setVelocity(0, 0, 0);
+        return NodeStatus::SUCCESS;
+    }
+
     double vxLimit, vyLimit, vthetaLimit, dist, safeDist;
     getInput("vx_limit", vxLimit);
     getInput("vy_limit", vyLimit);
@@ -355,7 +364,7 @@ NodeStatus Chase::tick()
         cbDirThreshold -= 0.2 * circleBackDir; 
         circleBackDir = toPInPI(theta_br - kickDir) > cbDirThreshold ? 1.0 : -1.0;
         log(format("targetType = circle_back, circleBackDir = %.1f", circleBackDir));
-        double tanTheta = theta_br + circleBackDir * acos(min(1.0, safeDist/max(ballRange, 1e-5))); 
+        double tanTheta = theta_br + circleBackDir * acos(clamp(safeDist/max(ballRange, 1e-5), -1.0, 1.0));
         target_f.x = ballPos.x + safeDist * cos(tanTheta);
         target_f.y = ballPos.y + safeDist * sin(tanTheta);
     }
@@ -415,8 +424,9 @@ NodeStatus SimpleChase::tick()
     vx *= linearFactor;
     vy *= linearFactor;
 
-    vx = cap(vx, vxLimit, -1.0);    
-    vy = cap(vy, vyLimit, -vyLimit); 
+    vx = cap(vx, vxLimit, -0.25);
+    vy = cap(vy, vyLimit, -vyLimit);
+    vtheta = cap(vtheta, 2.0, -2.0);
 
     if (brain->data->ball.range < stopDist)
     {
@@ -671,9 +681,9 @@ NodeStatus Assist::tick() {
     double vxLimit, vyLimit;
     getInput("vx_limit", vxLimit);
     getInput("vy_limit", vyLimit);
-    vx = cap(vx, vxLimit, -1.0);     
-    vy = cap(vy, vyLimit, -vyLimit);     
-    
+    vx = cap(vx, vxLimit, -0.25);
+    vy = cap(vy, vyLimit, -vyLimit);
+    vtheta = cap(vtheta, 2.0, -2.0);
 
     brain->client->setVelocity(vx, vy, vtheta);
     return NodeStatus::SUCCESS;
@@ -857,14 +867,17 @@ NodeStatus StrikerDecide::tick() {
     string newDecision;
     bool iKnowBallPos = brain->tree->getEntry<bool>("ball_location_known");
     bool tmBallPosReliable = brain->tree->getEntry<bool>("tm_ball_pos_reliable");
+    {
+        std::lock_guard<std::mutex> lock(brain->data->brainMutex);
+
     if (!(iKnowBallPos || tmBallPosReliable))
     {
         newDecision = "find";
     } else if (
                 brain->config->get_enable_auto_visual_kick() &&
-                brain->data->tmImLead && 
-                brain->data->tmMyCostRank == 0 && 
-                !brain->tree->getEntry<bool>("ball_out") && 
+                brain->data->tmImLead &&
+                brain->data->tmMyCostRank == 0 &&
+                !brain->tree->getEntry<bool>("ball_out") &&
                 brain->data->lose_ball == false &&
                 brain->data->tmMyCost < 7.0 &&
                 brain->data->ball.range < brain->config->get_auto_visual_kick_enable_dist_max() &&
@@ -873,7 +886,7 @@ NodeStatus StrikerDecide::tick() {
                 brain->data->ball.posToField.x > brain->config->fieldDimensions.length / 2 - 14.3 &&
                 fabs(brain->data->ball.posToField.y) < 5 &&
                 brain->data->robotPoseToField.x > brain->config->fieldDimensions.length / 2 - 14.3 &&
-                fabs(brain->data->robotPoseToField.y) < 5 
+                fabs(brain->data->robotPoseToField.y) < 5
             ) {
         newDecision = "auto_visual_kick";
         brain->data->tmImInVisualKick = true;
@@ -884,7 +897,7 @@ NodeStatus StrikerDecide::tick() {
         newDecision = "chase";
     } else if (
         (
-            (angleGoodForKick && !brain->data->isFreekickKickingOff) 
+            (angleGoodForKick && !brain->data->isFreekickKickingOff)
             || reachedKickDir
         )
         && brain->data->ballDetected
@@ -893,13 +906,18 @@ NodeStatus StrikerDecide::tick() {
         && ball.range < 1.5
     ) {
         if (brain->data->kickType == "cross") newDecision = "cross";
-        else newDecision = "kick";      
-        brain->data->isFreekickKickingOff = false; 
+        else newDecision = "kick";
+        brain->data->isFreekickKickingOff = false;
     }
     else
     {
         newDecision = "adjust";
     }
+
+    if (newDecision != "auto_visual_kick") {
+        brain->data->tmImInVisualKick = false;
+    }
+    } // brainMutex unlock
 
     setOutput("decision_out", newDecision);
     
@@ -1319,8 +1337,9 @@ NodeStatus RLVisionKick::onRunning()
     double minMsecKick = getInput<double>("min_msec_kick").value();
     
     // Check if ball is too far or cost is too high
-    bool ballTooFar = brain->data->ballDetected && brain->data->ball.range > 5.0;
-    bool shouldExit = (((ballTooFar || brain->data->tmMyCost > 8.0) && (elapsed > minMsecKick)) || brain->data->lose_ball || brain->tree->getEntry<bool>("ball_out"));
+    double maxMsecKick = 15000.0;
+    bool ballTooFar = brain->data->ballDetected && brain->data->ball.range > 1.5;
+    bool shouldExit = (((ballTooFar || brain->data->tmMyCost > 8.0) && (elapsed > minMsecKick)) || elapsed > maxMsecKick || brain->data->lose_ball || brain->tree->getEntry<bool>("ball_out"));
     
     if (shouldExit) {
         recordExitTime();

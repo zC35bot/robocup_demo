@@ -35,7 +35,7 @@ Brain::Brain() : rclcpp::Node("brain_node")
     player_id_desc.integer_range[0].from_value = 1;
     player_id_desc.integer_range[0].to_value = HL_MAX_NUM_PLAYERS;
     player_id_desc.integer_range[0].step = 1;
-    declare_parameter<int>("game.player_id", 29);
+    declare_parameter<int>("game.player_id", 1, player_id_desc);
     declare_parameter<string>("game.field_type", "");
 
     // player_role parameter validation
@@ -559,8 +559,10 @@ void Brain::handleSpecialStates() {
     if (gameState == "PLAY" && gameSubStateType == "FREE_KICK" && isFreekickKickoffSide) {
         data->isFreekickKickingOff = true;
         data->freekickKickoffStartTime = now;
-    } else if (msecsSince(data->freekickKickoffStartTime) > KICKOFF_DURATION * 1000) {
-        data->isFreekickKickingOff = false;
+    } else {
+        if (msecsSince(data->freekickKickoffStartTime) > KICKOFF_DURATION * 1000) {
+            data->isFreekickKickingOff = false;
+        }
         data->isDirectShoot = false;
     }
 
@@ -591,10 +593,13 @@ void Brain::handleCooperation() {
     vector<int> aliveTmIdxs = {}; // Indices of all alive teammates, excluding self
 
     // Update own status
-    data->tmImAlive = 
-        (data->penalty[selfIdx] == PENALTY_NONE) // Am I online, i.e., not penalized
-        && tree->getEntry<bool>("odom_calibrated"); // Before localization is successful, consider own information unreliable, not alive
-    updateCostToKick(); // Current cost to kick
+    {
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        data->tmImAlive =
+            (data->penalty[selfIdx] == PENALTY_NONE)
+            && tree->getEntry<bool>("odom_calibrated");
+        updateCostToKick();
+    }
     log_(format("ImAlive: %d, myCost: %.1f", data->tmImAlive, data->tmMyCost));
 
     
@@ -609,21 +614,24 @@ void Brain::handleCooperation() {
     log_(format("gcAliveCnt: %d", gcAliveCount));
 
     // Process teammate information. If no information is received from a teammate for a long time, or the teammate is in a penalty state according to the referee, the teammate is considered offline. Then get the indices of all online teammates.
-    for (int i = 0; i < HL_MAX_NUM_PLAYERS; i++) {
-        if (i == selfIdx) continue; // Skip self
+    {
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        for (int i = 0; i < HL_MAX_NUM_PLAYERS; i++) {
+            if (i == selfIdx) continue;
 
-        if (
-            data->penalty[i] != PENALTY_NONE // Penalized by referee
-            || msecsSince(data->tmStatus[i].timeLastCom) > COM_TIMEOUT // Or communication timeout
-        ) {
-            data->tmStatus[i].isAlive = false;
-            data->tmStatus[i].isLead = false;
-        }
-        
-        if (data->tmStatus[i].isAlive) {
-            aliveTmIdxs.push_back(i);
-            log->log_scalar("tm_status",format("tm_alive_scalar_%d", i + 1), data->tmStatus[i].cost);
-            log->log_scalar("tm_status",format("tm_lead_scalar_%d", i + 1), data->tmStatus[i].isLead ? 1 : 0);
+            if (
+                data->penalty[i] != PENALTY_NONE
+                || msecsSince(data->tmStatus[i].timeLastCom) > COM_TIMEOUT
+            ) {
+                data->tmStatus[i].isAlive = false;
+                data->tmStatus[i].isLead = false;
+            }
+
+            if (data->tmStatus[i].isAlive) {
+                aliveTmIdxs.push_back(i);
+                log->log_scalar("tm_status",format("tm_alive_scalar_%d", i + 1), data->tmStatus[i].cost);
+                log->log_scalar("tm_status",format("tm_lead_scalar_%d", i + 1), data->tmStatus[i].isLead ? 1 : 0);
+            }
         }
     }
     log_(format("alive TM Count: %d", aliveTmIdxs.size()));
@@ -640,7 +648,11 @@ void Brain::handleCooperation() {
     double minRange = 1e6;
     log_(format("Find ball info among %d alive TMs", aliveTmIdxs.size()));
     for (int i = 0; i < aliveTmIdxs.size(); i++) {
-        auto status = data->tmStatus[aliveTmIdxs[i]];
+        TMStatus status;
+        {
+            std::lock_guard<std::mutex> lock(data->brainMutex);
+            status = data->tmStatus[aliveTmIdxs[i]];
+        }
         log_(format("TM %d, ballDetected: %d, ballRange: %.1f", i + 1, status.ballDetected, status.ballRange));
         if (status.ballDetected && status.ballRange < minRange) {
             log_(format("tm ball range(%.1f) < minRange(%.1f)", status.ballRange, minRange));
@@ -654,9 +666,12 @@ void Brain::handleCooperation() {
             }
         }
     }
-    if (trustedTMIdx >= 0) { // Teammate saw the ball
+    if (trustedTMIdx >= 0) {
         log_(format("Reliable tm ball found. PlayerID = %d", trustedTMIdx + 1));
-        data->tmBall.posToField = data->tmStatus[trustedTMIdx].ballPosToField;
+        {
+            std::lock_guard<std::mutex> lock(data->brainMutex);
+            data->tmBall.posToField = data->tmStatus[trustedTMIdx].ballPosToField;
+        }
         updateRelativePos(data->tmBall);
 
         tree->setEntry<bool>("tm_ball_pos_reliable", true);
@@ -702,17 +717,20 @@ void Brain::handleCooperation() {
     double tmMinCost = 1e5;
     int myCostRank = 0;
     int myStrikerIDRank = 0;
-    double leadCost = 1e9; // cost of the teammate currently claiming lead (if any)
-    for (int i = 0; i < aliveTmIdxs.size(); i++) {
-        int tmIdx = aliveTmIdxs[i];
-        auto tmStatus = data->tmStatus[tmIdx];
-        if (tmStatus.cost < tmMinCost) tmMinCost = tmStatus.cost;
-        if (tmStatus.cost < data->tmMyCost) myCostRank++;
-        if (tmIdx < selfIdx && tmStatus.role == "striker") myStrikerIDRank++;
-        if (tmStatus.isLead && tmStatus.cost < leadCost) leadCost = tmStatus.cost;
+    double leadCost = 1e9;
+    {
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        for (int i = 0; i < aliveTmIdxs.size(); i++) {
+            int tmIdx = aliveTmIdxs[i];
+            auto tmStatus = data->tmStatus[tmIdx];
+            if (tmStatus.cost < tmMinCost) tmMinCost = tmStatus.cost;
+            if (tmStatus.cost < data->tmMyCost) myCostRank++;
+            if (tmIdx < selfIdx && tmStatus.role == "striker") myStrikerIDRank++;
+            if (tmStatus.isLead && tmStatus.cost < leadCost) leadCost = tmStatus.cost;
+        }
+        data->tmMyCostRank = myCostRank;
+        data->myStrikerIDRank = myStrikerIDRank;
     }
-    data->tmMyCostRank = myCostRank;
-    data->myStrikerIDRank = myStrikerIDRank;
 
     // Phase1 §7.2: lead competition with hysteresis to prevent oscillation.
     //  - A teammate "controlling the ball" or my cost-rank >= 2 forces me to give up lead.
@@ -747,7 +765,10 @@ void Brain::handleCooperation() {
         newLead = hasLeadAdvantage && (msecsSince(leadAdvantageStart) > leadMinMsec);
     }
 
-    data->tmImLead = newLead;
+    {
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        data->tmImLead = newLead;
+    }
     tree->setEntry<bool>("is_lead", newLead);
     log_(newLead ? "I am Lead" : "I am not lead");
     log_(format("tmMinCost: %.1f, leadCost: %.1f, myCost: %.1f, myCostRank: %d, myStrikerIDRank: %d, advantageHeld: %d", tmMinCost, leadCost, data->tmMyCost, myCostRank, myStrikerIDRank, hasLeadAdvantage));
@@ -769,7 +790,11 @@ void Brain::handleCooperation() {
         double myDist = distToGoal(data->robotPoseToField);
         for (int i = 0; i < aliveTmIdxs.size(); i++) {
             int tmIdx = aliveTmIdxs[i];
-            auto tmPose = data->tmStatus[tmIdx].robotPoseToField;
+            Pose2D tmPose;
+            {
+                std::lock_guard<std::mutex> lock(data->brainMutex);
+                tmPose = data->tmStatus[tmIdx].robotPoseToField;
+            }
             double dist = distToGoal(tmPose);
             if (dist > maxDist) maxDist = dist;
             if (dist < minDist) {
@@ -778,9 +803,10 @@ void Brain::handleCooperation() {
             }
         }
         if (minIndex >= 0 && myDist > maxDist) {
+            std::lock_guard<std::mutex> lock(data->brainMutex);
             data->tmLastCmdChangeTime = get_clock()->now();
-            data->tmMyCmd = 10 + minIndex + 1; // Command is 10 + teammate id, e.g., 10 + 1 = 11, means player 1 becomes the goalkeeper
-            data->tmCmdId += 1; // Increase command ID to make the command unique
+            data->tmMyCmd = 10 + minIndex + 1;
+            data->tmCmdId += 1;
             data->tmMyCmdId = data->tmCmdId;
             tree->setEntry<string>("player_role", "striker");
             log_(format("goalie: i am too far from goal, i ask player %d to attack", minIndex + 1));
@@ -790,27 +816,33 @@ void Brain::handleCooperation() {
     }
 
     // Handle received commands
-    auto cmd = data->tmReceivedCmd;
-    if (cmd != 0) { // Teammate wants to take control
+    int cmd;
+    {
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        cmd = data->tmReceivedCmd;
+    }
+    if (cmd != 0) {
         log_(format("received cmd %d from teammate", cmd));
-        if (cmd == 100) { // Teammate wants to take control
-            data->tmImLead = false; // I am no longer the lead
+        if (cmd == 100) {
+            std::lock_guard<std::mutex> lock(data->brainMutex);
+            data->tmImLead = false;
             tree->setEntry<bool>("is_lead", false);
             log_("teammate wants to take lead, i'll assist");
-        } else if (cmd > 10 && cmd < 20) { // Goalkeeper wants to attack
+        } else if (cmd > 10 && cmd < 20) {
             log_("goalie wants to attack");
             int newGoalieId = cmd - 10;
-            if (newGoalieId == selfId) { // I am the new goalkeeper
+            if (newGoalieId == selfId) {
                 log_("i become goalie");
                 tree->setEntry<string>("player_role", "goal_keeper");
-            } else { // I am not the new goalkeeper
+            } else {
                 log_(format("teammate %d becomes goalie", newGoalieId));
             }
         } else {
             log_(format("unknown cmd %d from teammate", cmd));
         }
 
-        data->tmReceivedCmd = 0; // Clear the received command, so it is executed only once.
+        std::lock_guard<std::mutex> lock(data->brainMutex);
+        data->tmReceivedCmd = 0;
     }
 
     tree->setEntry<bool>("is_lead", data->tmImLead);
@@ -1431,7 +1463,8 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
 
     int teamId = config->get_team_id();
     int playerId = config->get_player_id();
-    string gameState = gameStateMap[static_cast<int>(msg.state)];
+    int stateIdx = static_cast<int>(msg.state);
+    string gameState = (stateIdx >= 0 && stateIdx < static_cast<int>(gameStateMap.size())) ? gameStateMap[stateIdx] : "INITIAL";
     tree->setEntry<string>("gc_game_state", gameState);
     bool isKickOffSide = (msg.kick_off_team == teamId); // Whether our team is the kickoff side
     tree->setEntry<bool>("gc_is_kickoff_side", isKickOffSide);
@@ -1532,7 +1565,8 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
     data->oppoLiveCount = oppoLiveCount;
 
     bool lastIsUnderPenalty = tree->getEntry<bool>("gc_is_under_penalty");
-    bool isUnderPenalty = (data->penalty[playerId - 1] != PENALTY_NONE); // Whether the current robot is under penalty
+    int pidIdx = playerId - 1;
+    bool isUnderPenalty = (pidIdx >= 0 && pidIdx < HL_MAX_NUM_PLAYERS) ? (data->penalty[pidIdx] != PENALTY_NONE) : true;
     tree->setEntry<bool>("gc_is_under_penalty", isUnderPenalty);
     if (isUnderPenalty && !lastIsUnderPenalty) tree->setEntry<bool>("odom_calibrated", false); // If penalized, need to re-enter the field, thus need to re-localize
 
@@ -1544,8 +1578,8 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
 
 void Brain::detectionsCallback(const vision_interface::msg::Detections &msg)
 {
-    // std::lock_guard<std::mutex> guard(data->brainMutex);
-    
+    std::lock_guard<std::mutex> guard(data->brainMutex);
+
     // auto detection_time_stamp = msg.header.stamp;
     // rclcpp::Time timePoint(detection_time_stamp.sec, detection_time_stamp.nanosec);
     data->camConnected = true;
@@ -1710,8 +1744,9 @@ void Brain::recoveryStateCallback(const booster_interface::msg::RawBytesMsg &msg
     try
     {
         const std::vector<unsigned char>& buffer = msg.msg;
+        if (buffer.size() < sizeof(RobotRecoveryStateData)) return;
         RobotRecoveryStateData recoveryState;
-        memcpy(&recoveryState, buffer.data(), buffer.size());
+        memcpy(&recoveryState, buffer.data(), sizeof(RobotRecoveryStateData));
 
         vector<RobotRecoveryState> recoveryStateMap = {
             RobotRecoveryState::IS_READY,
@@ -1719,7 +1754,11 @@ void Brain::recoveryStateCallback(const booster_interface::msg::RawBytesMsg &msg
             RobotRecoveryState::HAS_FALLEN,
             RobotRecoveryState::IS_GETTING_UP
         };
-        this->data->recoveryState = recoveryStateMap[static_cast<int>(recoveryState.state)];
+        int stateIdx = static_cast<int>(recoveryState.state);
+        if (stateIdx >= 0 && stateIdx < static_cast<int>(recoveryStateMap.size()))
+            this->data->recoveryState = recoveryStateMap[stateIdx];
+        else
+            this->data->recoveryState = RobotRecoveryState::IS_READY;
         this->data->isRecoveryAvailable = static_cast<bool>(recoveryState.is_recovery_available);
         this->data->currentRobotModeIndex = static_cast<int>(recoveryState.current_planner_index);
         
@@ -1983,6 +2022,7 @@ vector<GameObject> Brain::getGameObjects(const vision_interface::msg::Detections
         gObj.confidence = obj.confidence;
 
         // Do not use depth measurement, directly use projection distance
+        if (obj.position_projection.size() < 2) continue;
         gObj.posToRobot.x = obj.position_projection[0];
         gObj.posToRobot.y = obj.position_projection[1];
 

@@ -44,6 +44,7 @@ void DataSyncer::AddPose(const PoseDataBlock &pose_data) {
 }
 
 SyncedDataBlock DataSyncer::getSyncedDataBlock() {
+    if (time_stamp_list_.empty()) return SyncedDataBlock();
     std::string color_file_path = data_dir_ + "/color_" + std::to_string(time_stamp_list_[data_index_]) + ".jpg";
     std::string depth_file_path = data_dir_ + "/depth_" + std::to_string(time_stamp_list_[data_index_]) + ".png";
     std::string pose_file_path = data_dir_ + "/pose_" + std::to_string(time_stamp_list_[data_index_]) + ".yaml";
@@ -109,7 +110,8 @@ SyncedDataBlock DataSyncer::getSyncedDataBlock(const ColorDataBlock &color_data)
     double color_timestamp = color_data.timestamp;
     if (enable_depth_) {
         double smallest_depth_timestamp_diff = DBL_MAX;
-        for (DepthBuffer::reverse_iterator it = depth_buffer_cp.rbegin(); it != depth_buffer_cp.rbegin() + kDepthBufferLength; ++it) {
+        auto depth_end = depth_buffer_cp.rbegin() + std::min(static_cast<size_t>(kDepthBufferLength), depth_buffer_cp.size());
+        for (DepthBuffer::reverse_iterator it = depth_buffer_cp.rbegin(); it != depth_end; ++it) {
             double diff = std::abs(it->timestamp - color_timestamp);
             if (diff < smallest_depth_timestamp_diff) {
                 smallest_depth_timestamp_diff = diff;
@@ -123,7 +125,8 @@ SyncedDataBlock DataSyncer::getSyncedDataBlock(const ColorDataBlock &color_data)
     }
 
     double smallest_pose_timestamp_diff = DBL_MAX;
-    for (PoseBuffer::reverse_iterator it = pose_buffer_cp.rbegin(); it != pose_buffer_cp.rbegin() + kPoseBufferLength; ++it) {
+    auto pose_end = pose_buffer_cp.rbegin() + std::min(static_cast<size_t>(kPoseBufferLength), pose_buffer_cp.size());
+    for (PoseBuffer::reverse_iterator it = pose_buffer_cp.rbegin(); it != pose_end; ++it) {
         double diff = std::abs(it->timestamp - color_timestamp);
         if (diff < smallest_pose_timestamp_diff) {
             smallest_pose_timestamp_diff = diff;

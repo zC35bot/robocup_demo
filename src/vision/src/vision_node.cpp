@@ -198,9 +198,10 @@ void VisionNode::Init(const std::string &cfg_template_path, const std::string &c
     use_depth_ = as_or<bool>(node["use_depth"], false);
     data_syncer_ = std::make_shared<DataSyncer>(use_depth_);
     bool save_data_nonstationary = as_or<bool>(node["misc"]["save_data_nonstationary"], true);
-    std::string log_root = std::string(std::getenv("HOME")) + "/Workspace/vision_log/" + getTimeString();
+    const char* home_env = std::getenv("HOME");
+    std::string log_root = std::string(home_env ? home_env : "/tmp") + "/Workspace/vision_log/" + getTimeString();
     data_logger_ = save_data_ ? std::make_shared<DataLogger>(log_root, save_data_nonstationary) : nullptr;
-    data_logger_->LogYAML(node, "vision_local.yaml");
+    if (data_logger_) data_logger_->LogYAML(node, "vision_local.yaml");
     seg_data_syncer_ = std::make_shared<DataSyncer>(false);
 
 
@@ -439,7 +440,9 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
 
         if ((color_classifier_ != nullptr) && (detection.class_name == "Opponent")) {
             // get a crop of the image given detection.bbox
-            cv::Mat crop = color(detection.bbox);
+            cv::Rect safe_bbox = detection.bbox & cv::Rect(0, 0, color.cols, color.rows);
+            if (safe_bbox.empty()) continue;
+            cv::Mat crop = color(safe_bbox);
             std::string robot_color_str = color_classifier_->Classify(crop);
             // add robot color to detection_obj
             detection_obj.color = robot_color_str;
@@ -508,7 +511,7 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
         } else {
             save_cnt_ = 0;
         }
-        data_logger_->LogDataBlock(synced_data);
+        if (data_logger_) data_logger_->LogDataBlock(synced_data);
     }
 }
 

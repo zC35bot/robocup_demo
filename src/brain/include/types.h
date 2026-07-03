@@ -74,22 +74,22 @@ struct LocateResult
 // Point: 3D point
 struct Point
 {
-    double x;
-    double y;
-    double z;
+    double x = 0;
+    double y = 0;
+    double z = 0;
 };
 
 // Point2D: 2D point
 struct Point2D
 {
-    double x;
-    double y;
+    double x = 0;
+    double y = 0;
 };
 
 // BoundingBox
 struct BoundingBox
 {
-    double xmin, xmax, ymin, ymax;
+    double xmin = 0, xmax = 0, ymin = 0, ymax = 0;
 };
 
 // GameObject: stores important match entities such as Ball, Goalpost, etc.
@@ -100,17 +100,17 @@ struct GameObject
     string color;
     BoundingBox boundingBox;
     Point2D precisePixelPoint;
-    double confidence;
+    double confidence = 0;
     Point posToRobot;
 
     Point posToField;
-    double range;
-    double pitchToRobot, yawToRobot;
+    double range = 0;
+    double pitchToRobot = 0, yawToRobot = 0;
     rclcpp::Time timePoint; // Time when the object was detected
 
-    int id;
+    int id = 0;
     string name;
-    double idConfidence;
+    double idConfidence = 0;
     string info;
 };
 

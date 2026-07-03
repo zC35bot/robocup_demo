@@ -134,6 +134,7 @@ public:
     int tmMyCostRank = 0; // Rank of my cost to reach the ball, used for multi-robot coordination. Cost roughly equals seconds to reach/kick the ball.
     int myStrikerIDRank = 0; // My ID rank among strikers, used for multi-robot coordination.
     bool tmImInVisualKick = false; // Whether I am currently in VisualKick mode, used to coordinate with teammates and avoid conflicts.
+    std::mutex brainMutex; // Protects cross-thread fields (tmImInVisualKick, kickDir, etc.) from torn reads by communication thread
 
     bool shouldExitRLVisionKick = false; // Whether to exit RL-based vision kick mode, used to coordinate with brain tree and ensure smooth transition back to normal behavior after visual kick.
 

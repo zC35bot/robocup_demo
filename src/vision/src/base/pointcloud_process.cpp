@@ -80,7 +80,7 @@ void VisualizePointCloudSphere(const pcl::PointCloud<pcl::PointXYZRGB>::Ptr &clo
         center.y = sphere[1];
         center.z = sphere[2];
         std::string name = "sphere" + std::to_string(i);
-        std::vector<float> color = colors[i];
+        std::vector<float> color = colors[i % colors.size()];
         viewer.addSphere(center, sphere[3], name.c_str());
         viewer.setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, color[0], color[1], color[2], name.c_str()); // Red color
         viewer.setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.3, name.c_str());
@@ -181,6 +181,8 @@ void SphereFitting(std::vector<float> &sphere, float &confidence, const pcl::Poi
     sphere = {0, 0, 0, 0};
     confidence = 0;
 
+    if (cloud->points.empty()) return;
+
     pcl::SACSegmentation<pcl::PointXYZRGB> seg;
     pcl::ModelCoefficients coefficients;
     pcl::PointIndices inliers;
@@ -198,6 +200,7 @@ void SphereFitting(std::vector<float> &sphere, float &confidence, const pcl::Poi
         return;
     }
 
+    if (coefficients.values.size() < 4) { confidence = 0; return; }
     sphere = coefficients.values;
     if (std::abs(coefficients.values[3] - radius_threshold) > 0.02) {
         std::cout << "raidus " << coefficients.values[3] << " higher than expected " << radius_threshold << std::endl;

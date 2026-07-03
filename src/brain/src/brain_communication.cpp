@@ -374,28 +374,31 @@ void BrainCommunication::unicastCommunication() {
         msg.teamId = brain->config->get_team_id();
         msg.playerId = brain->config->get_player_id();
         
-        string role = brain->tree->getEntry<string>("player_role");
-        if (role == "striker") {
-            msg.playerRole = 1;
-        } else if (role == "goal_keeper") {
-            msg.playerRole = 2;
-        } else {
-            msg.playerRole = 3; // Unknown role
-        }
+        {
+            std::lock_guard<std::mutex> lock(brain->data->brainMutex);
+            string role = brain->tree->getEntry<string>("player_role");
+            if (role == "striker") {
+                msg.playerRole = 1;
+            } else if (role == "goal_keeper") {
+                msg.playerRole = 2;
+            } else {
+                msg.playerRole = 3; // Unknown role
+            }
 
-        msg.isAlive = brain->data->tmImAlive;
-        msg.isLead = brain->data->tmImLead;
-        msg.ballDetected = brain->data->ballDetected;
-        msg.ballLocationKnown = brain->tree->getEntry<bool>("ball_location_known");
-        msg.ballConfidence = brain->data->ball.confidence;
-        msg.ballRange = brain->data->ball.range;
-        msg.cost = brain->data->tmMyCost;
-        msg.ballPosToField = brain->data->ball.posToField;
-        msg.robotPoseToField = brain->data->robotPoseToField;
-        msg.kickDir = brain->data->kickDir;
-        msg.thetaRb = brain->data->robotBallAngleToField;
-        msg.cmdId = brain->data->tmMyCmdId;
-        msg.cmd = brain->data->tmMyCmd;
+            msg.isAlive = brain->data->tmImAlive;
+            msg.isLead = brain->data->tmImLead;
+            msg.ballDetected = brain->data->ballDetected;
+            msg.ballLocationKnown = brain->tree->getEntry<bool>("ball_location_known");
+            msg.ballConfidence = brain->data->ball.confidence;
+            msg.ballRange = brain->data->ball.range;
+            msg.cost = brain->data->tmMyCost;
+            msg.ballPosToField = brain->data->ball.posToField;
+            msg.robotPoseToField = brain->data->robotPoseToField;
+            msg.kickDir = brain->data->kickDir;
+            msg.thetaRb = brain->data->robotBallAngleToField;
+            msg.cmdId = brain->data->tmMyCmdId;
+            msg.cmd = brain->data->tmMyCmd;
+        }
         // Phase1 §7.3: stamp send time + packet size.
         msg.timestamp_ms = static_cast<uint64_t>(brain->get_clock()->now().nanoseconds() / 1000000);
         msg.packet_size = static_cast<int>(sizeof(TeamCommunicationMsg));
@@ -549,34 +552,36 @@ void BrainCommunication::spinCommunicationReceiver() {
 
         log(format("TMID: %.d, alive: %d, lead: %d, cost: %.1f, CmdId: %d, Cmd: %d, age: %ld ms", msg.playerId, msg.isAlive, msg.isLead, msg.cost, msg.cmdId, msg.cmd, age_ms));
 
-        TMStatus &tmStatus = brain->data->tmStatus[tmIdx];
-        
-        switch(msg.playerRole) {
-            case 1: tmStatus.role = "striker"; break;
-            case 2: tmStatus.role = "goal_keeper"; break;
-            default: tmStatus.role = "unknown"; break;
-        }
-        tmStatus.isAlive = msg.isAlive;
-        tmStatus.ballDetected = msg.ballDetected;
-        tmStatus.ballLocationKnown = msg.ballLocationKnown;
-        tmStatus.ballConfidence = msg.ballConfidence;
-        tmStatus.ballRange = msg.ballRange;
-        tmStatus.cost = msg.cost;
-        tmStatus.isLead = msg.isLead;
-        tmStatus.ballPosToField = msg.ballPosToField;
-        tmStatus.robotPoseToField = msg.robotPoseToField;
-        tmStatus.kickDir = msg.kickDir;
-        tmStatus.thetaRb = msg.thetaRb;
-        tmStatus.timeLastCom = brain->get_clock()->now();
-        tmStatus.cmd = msg.cmd;
-        tmStatus.cmdId = msg.cmdId;
+        {
+            std::lock_guard<std::mutex> lock(brain->data->brainMutex);
+            TMStatus &tmStatus = brain->data->tmStatus[tmIdx];
 
-        // Check if a new command has been received
-        if (msg.cmdId > brain->data->tmCmdId) {
-            brain->data->tmCmdId = msg.cmdId;
-            brain->data->tmReceivedCmd = msg.cmd;
-            brain->data->tmLastCmdChangeTime = brain->get_clock()->now();
-            log(format("Received new command from teammate %d: %d", msg.playerId, msg.cmd));
+            switch(msg.playerRole) {
+                case 1: tmStatus.role = "striker"; break;
+                case 2: tmStatus.role = "goal_keeper"; break;
+                default: tmStatus.role = "unknown"; break;
+            }
+            tmStatus.isAlive = msg.isAlive;
+            tmStatus.ballDetected = msg.ballDetected;
+            tmStatus.ballLocationKnown = msg.ballLocationKnown;
+            tmStatus.ballConfidence = msg.ballConfidence;
+            tmStatus.ballRange = msg.ballRange;
+            tmStatus.cost = msg.cost;
+            tmStatus.isLead = msg.isLead;
+            tmStatus.ballPosToField = msg.ballPosToField;
+            tmStatus.robotPoseToField = msg.robotPoseToField;
+            tmStatus.kickDir = msg.kickDir;
+            tmStatus.thetaRb = msg.thetaRb;
+            tmStatus.timeLastCom = brain->get_clock()->now();
+            tmStatus.cmd = msg.cmd;
+            tmStatus.cmdId = msg.cmdId;
+
+            if (msg.cmdId > brain->data->tmCmdId) {
+                brain->data->tmCmdId = msg.cmdId;
+                brain->data->tmReceivedCmd = msg.cmd;
+                brain->data->tmLastCmdChangeTime = brain->get_clock()->now();
+                log(format("Received new command from teammate %d: %d", msg.playerId, msg.cmd));
+            }
         }
 
     }

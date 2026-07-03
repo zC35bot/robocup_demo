@@ -14,7 +14,9 @@ cv::Point3f CalculatePositionByIntersection(const Pose &p_eye2base, const cv::Po
 
     cv::Mat mat_rot_obj_ray = mat_rot * mat_obj_ray;
 
-    float scale = -mat_trans.at<float>(2, 0) / mat_rot_obj_ray.at<float>(2, 0);
+    float denom = mat_rot_obj_ray.at<float>(2, 0);
+    if (std::abs(denom) < 1e-6f) return cv::Point3f(0, 0, 0);
+    float scale = -mat_trans.at<float>(2, 0) / denom;
 
     cv::Mat mat_position = mat_trans + scale * mat_rot_obj_ray;
     return cv::Point3f(mat_position.at<float>(0, 0), mat_position.at<float>(1, 0), mat_position.at<float>(2, 0));
@@ -128,7 +130,7 @@ Pose HumanLikePoseEstimator::EstimateByDepth(const Pose &p_eye2base, const Detec
     float confidence;
     PlaneFitting(plane_coeffs, confidence, processed_cloud, fitting_distance_threshold_);
 
-    // TODO(GW): add plane fitting res check
+    if (plane_coeffs.size() < 4) return pose;
 
     // compute plane ray intersection
     auto bbox = detection.bbox;
@@ -139,7 +141,9 @@ Pose HumanLikePoseEstimator::EstimateByDepth(const Pose &p_eye2base, const Detec
     float b = plane_coeffs[1];
     float c = plane_coeffs[2];
     float d = plane_coeffs[3];
-    float scale = -d / (normalized_point3d.x * a + normalized_point3d.y * b + c);
+    float denominator = normalized_point3d.x * a + normalized_point3d.y * b + c;
+    if (std::abs(denominator) < 1e-6f) return pose;
+    float scale = -d / denominator;
 
     pose = p_eye2base * Pose(normalized_point3d.x * scale, normalized_point3d.y * scale, normalized_point3d.z * scale, 0, 0, 0);
     return pose;

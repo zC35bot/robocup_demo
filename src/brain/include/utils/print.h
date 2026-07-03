@@ -45,7 +45,7 @@ inline string format(const char *str, ...)
     char buf[1024];
     va_list args;
     va_start(args, str);
-    vsprintf(buf, str, args);
+    vsnprintf(buf, sizeof(buf), str, args);
     va_end(args);
     return string(buf);
 }
@@ -56,7 +56,7 @@ inline const char* format2cstr(const char *str, ...)
     static thread_local char buf[1024];
     va_list args;
     va_start(args, str);
-    vsprintf(buf, str, args);
+    vsnprintf(buf, sizeof(buf), str, args);
     va_end(args);
     return buf;
 }

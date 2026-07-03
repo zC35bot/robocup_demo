@@ -3,6 +3,7 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <iostream>
 #include <thread>
 #include <mutex>
 #include <queue>
@@ -130,7 +131,11 @@ private:
                 log_task = std::move(log_queue_.front());
                 log_queue_.pop();
             }
-            log_task();
+            try {
+                log_task();
+            } catch (const std::exception& e) {
+                std::cerr << "DataLogger: task failed: " << e.what() << std::endl;
+            }
         }
     }
 };

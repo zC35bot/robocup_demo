@@ -32,7 +32,10 @@ int RobotClient::moveHead(double pitch, double yaw)
     yaw = cap(yaw, brain->config->get_head_yaw_limit_left(), brain->config->get_head_yaw_limit_right());
     pitch = max(pitch, brain->config->get_head_pitch_limit_up());
 
-    brain->log->debug("move_head", format("pitch: %.1f, yaw: %.1f", pitch, yaw));
+    if (fabs(pitch) > 2.0 || fabs(yaw) > 2.0)
+        brain->log->error("move_head", format("ABNORMAL pitch: %.1f, yaw: %.1f", pitch, yaw));
+    else
+        brain->log->debug("move_head", format("pitch: %.1f, yaw: %.1f", pitch, yaw));
 
     return call(booster_interface::CreateRotateHeadMsg(pitch, yaw));
 }
@@ -52,7 +55,9 @@ int RobotClient::RLVisionKick(bool start)
     booster_interface::msg::BoosterApiReqMsg msg;
     msg.api_id = static_cast<int64_t>(booster::robot::b1::LocoApiId::kVisualKick);
     nlohmann::json body;
-    body["start"] = start;  // Add start parameter to indicate whether to enter VisualKick mode
+    body["start"] = start;
+    // kV2 = 2: preserves prior visual-kick behavior; firmware expects version field
+    body["version"] = 2;
     msg.body = body.dump();
     std::cout << "RobotClient::RLVisionKick called with start=" << (start ? "true" : "false") << std::endl;
     return call(msg);
@@ -60,7 +65,8 @@ int RobotClient::RLVisionKick(bool start)
 
 int RobotClient::robocupWalk()
 {
-    std::cout << "RobotClient::robocupWalk CreateChangeModeMsg called" << std::endl;
+    std::cout << "RobotClient::robocupWalk exit VisualKick(false) and switch to kWalking" << std::endl;
+    RLVisionKick(false);
     return call(booster_interface::CreateChangeModeMsg(booster::robot::RobotMode::kWalking));
 }
 
@@ -74,7 +80,7 @@ int RobotClient::waveHand(bool doWaveHand)
     return call(booster_interface::CreateWaveHandMsg(booster::robot::b1::HandIndex::kRightHand, doWaveHand ? booster::robot::b1::HandAction::kHandOpen : booster::robot::b1::HandAction::kHandClose));
 }
 
-int RobotClient::setVelocity(double x, double y, double theta)
+int RobotClient::setVelocity(double x, double y, double theta, bool applyMinX, bool applyMinY, bool applyMinTheta)
 {
     brain->log->log("RobotClient/setVelocity_in",
                     format("vx: %.2f  vy: %.2f  vtheta: %.2f", x, y, theta));
@@ -82,11 +88,11 @@ int RobotClient::setVelocity(double x, double y, double theta)
     double minx = brain->config->get_min_vx();
     double miny = brain->config->get_min_vy();
     double mintheta =  brain->config->get_min_vtheta();
-    if (fabs(x) < minx && fabs(x) > 1e-5)
+    if (applyMinX && fabs(x) < minx && fabs(x) > 1e-5)
         x = x > 0 ? minx : -minx;
-    if (fabs(y) < miny && fabs(y) > 1e-5)
+    if (applyMinY && fabs(y) < miny && fabs(y) > 1e-5)
         y = y > 0 ? miny : -miny;
-    if (fabs(theta) < mintheta && fabs(theta) > 1e-5)
+    if (applyMinTheta && fabs(theta) < mintheta && fabs(theta) > 1e-5)
         theta = theta > 0 ? mintheta : -mintheta;
     x = cap(x, brain->config->get_vx_limit(), -brain->config->get_vx_limit());
     y = cap(y, brain->config->get_vy_limit(), -brain->config->get_vy_limit());
@@ -483,9 +489,11 @@ double RobotClient::msecsToCollide(double vx, double vy, double vtheta, double m
     double y0 = brain->data->robotPoseToField.y;
     double robotTheta = brain->data->robotPoseToField.theta;
 
+    const double vxField = vx * cos(robotTheta) - vy * sin(robotTheta);
+    const double vyField = vx * sin(robotTheta) + vy * cos(robotTheta);
     Line path = {
         x0, y0,
-        x0 + vx * cos(robotTheta) * maxTime / 1000, y0 + vy * sin(robotTheta) * maxTime / 1000
+        x0 + vxField * maxTime / 1000, y0 + vyField * maxTime / 1000
     };
 
     double minDist = 1e6;

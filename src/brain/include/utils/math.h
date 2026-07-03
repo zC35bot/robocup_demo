@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include <Eigen/Dense>
@@ -156,7 +157,7 @@ inline double angleBetweenLines(const Line l1, const Line l2) {
     auto normProdut = norm(AB) * norm(CD);
     if (normProdut == 0) return 0.;
 
-    auto angle = acos((innerProduct(AB, CD)) / normProdut);
+    auto angle = acos(clamp((innerProduct(AB, CD)) / normProdut, -1.0, 1.0));
     if (angle > M_PI / 2) angle = M_PI - angle;
     
     return angle;

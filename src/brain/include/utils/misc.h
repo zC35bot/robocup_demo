@@ -52,6 +52,7 @@ inline std::string gen_timestamped_filename(const std::string& dir, const std::s
     if (addUUID) filename += ("_" + gen_uuid());
     filename += ext;
     
+    if (dir.empty()) return filename;
     if (dir.back() == '/') return dir + filename;
     
     // else

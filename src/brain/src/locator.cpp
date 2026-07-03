@@ -119,6 +119,7 @@ int Locator::genParticles()
             if (old_hypos(j, 5) >= rand)
                 break;
         }
+        if (j >= old_hypos.rows()) { j = old_hypos.rows() - 1; }
         hypos.row(i).head(3) = old_hypos.row(j).head(3);
     }
 

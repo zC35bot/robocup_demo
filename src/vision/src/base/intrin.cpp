@@ -110,16 +110,14 @@ cv::Point3f Intrinsics::BackProject(const cv::Point2f &point, float depth) const
 }
 
 cv::Point2f Intrinsics::UnDistort(const cv::Point2f &point) const {
-    cv::Point2f undistorted_point;
     switch (model) {
-    case DistortionModel::kBrownConrady: // TODO(SS): fix this later
+    case DistortionModel::kBrownConrady:
     case DistortionModel::kInverseBrownConrady:
-        undistorted_point = Project(BackProject(point));
+        return Project(BackProject(point));
     case DistortionModel::kNone:
     default:
-        undistorted_point = point;
+        return point;
     }
-    return undistorted_point;
 }
 
 } // namespace booster_vision
