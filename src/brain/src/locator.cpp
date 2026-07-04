@@ -374,8 +374,10 @@ NodeStatus SelfLocate::tick()
         xMax = min(brain->config->fieldDimensions.length / 2 + 2, brain->data->robotPoseToField.x + maxDrift);
         yMin = max(-brain->config->fieldDimensions.width / 2 - 2, brain->data->robotPoseToField.y - maxDrift);
         yMax = min(brain->config->fieldDimensions.width / 2 + 2, brain->data->robotPoseToField.y + maxDrift);
-        thetaMin = brain->data->robotPoseToField.theta - M_PI / 180;
-        thetaMax = brain->data->robotPoseToField.theta + M_PI / 180;
+        // ±5°: gait slip drifts the heading a few degrees between fixes; ±1° made
+        // vision unable to correct it, so tracking failed permanently while walking.
+        thetaMin = brain->data->robotPoseToField.theta - M_PI / 36;
+        thetaMax = brain->data->robotPoseToField.theta + M_PI / 36;
     }
     else if (mode == "fall_recovery")
     {
@@ -387,8 +389,9 @@ NodeStatus SelfLocate::tick()
         xMax = brain->config->fieldDimensions.length / 2 + 2;
         yMin = -brain->config->fieldDimensions.width / 2 - 2;
         yMax = brain->config->fieldDimensions.width / 2 + 2;
-        thetaMin = brain->data->robotPoseToField.theta - M_PI / 180;
-        thetaMax = brain->data->robotPoseToField.theta + M_PI / 180;
+        // ±10°: a fall can twist the body noticeably; ±1° could never re-match.
+        thetaMin = brain->data->robotPoseToField.theta - M_PI / 18;
+        thetaMax = brain->data->robotPoseToField.theta + M_PI / 18;
     }
 
     
