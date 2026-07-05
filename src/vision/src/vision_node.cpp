@@ -29,6 +29,7 @@ VisionNode::VisionNode(const std::string &node_name, const rclcpp::NodeOptions &
     this->declare_parameter<bool>("offline_mode", false);
     this->declare_parameter<bool>("show_det", false);
     this->declare_parameter<bool>("show_seg", false);
+    this->declare_parameter<bool>("pub_det_image", false);
     this->declare_parameter<bool>("save_data", true);
     this->declare_parameter<bool>("save_depth", true);
     this->declare_parameter<int>("save_fps", 3);
@@ -65,6 +66,7 @@ void VisionNode::Init(const std::string &cfg_template_path, const std::string &c
 
     this->get_parameter<bool>("show_det", show_det_);
     this->get_parameter<bool>("show_seg", show_seg_);
+    this->get_parameter<bool>("pub_det_image", pub_det_image_);
     this->get_parameter<bool>("save_data", save_data_);
     this->get_parameter<bool>("save_depth", save_depth_);
     this->get_parameter<bool>("offline_mode", offline_mode_);
@@ -299,6 +301,10 @@ void VisionNode::Init(const std::string &cfg_template_path, const std::string &c
 
     detection_pub_ = this->create_publisher<vision_interface::msg::Detections>("/booster_soccer/detection" + topic_suffix, rclcpp::QoS(1));
 
+    if (pub_det_image_) {
+        detection_img_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/booster_soccer/detection_image" + topic_suffix, rclcpp::QoS(1));
+    }
+
     if (node["segmentation_model"]) {
         std::cout << "create sub for segmentor" << std::endl;
         if (color_topic_.find("compressed") != std::string::npos) {
@@ -485,23 +491,42 @@ void VisionNode::ProcessData(SyncedDataBlock &synced_data, vision_interface::msg
         count++;
     }
 
-    // show vision results
-    if (show_det_) {
+    // show / publish vision results
+    if (show_det_ || (pub_det_image_ && detection_img_pub_)) {
         cv::Mat color_rgb;
         cv::cvtColor(color, color_rgb, cv::COLOR_BGR2RGB);
         cv::Mat img_out = YoloV8Detector::DrawDetection(color_rgb, detections_for_display);
-        cv::imshow("Detection", img_out);
 
-        // color jet depth_float and show
-        // if (!depth_float.empty()) {
-        //     cv::Mat depth_colormap;
-        //     cv::normalize(depth_float, depth_float, 0, 255, cv::NORM_MINMAX);
-        //     depth_float.convertTo(depth_float, CV_8U);
-        //     cv::applyColorMap(depth_float, depth_colormap, cv::COLORMAP_JET);
-        //     cv::imshow("Depth", depth_colormap);
-        // }
+        if (show_det_) {
+            cv::imshow("Detection", img_out);
 
-        cv::waitKey(1);
+            // color jet depth_float and show
+            // if (!depth_float.empty()) {
+            //     cv::Mat depth_colormap;
+            //     cv::normalize(depth_float, depth_float, 0, 255, cv::NORM_MINMAX);
+            //     depth_float.convertTo(depth_float, CV_8U);
+            //     cv::applyColorMap(depth_float, depth_colormap, cv::COLORMAP_JET);
+            //     cv::imshow("Depth", depth_colormap);
+            // }
+
+            cv::waitKey(1);
+        }
+
+        // Publish the annotated frame as JPEG so a remote viewer (e.g. Foxglove over
+        // a WebSocket bridge) can render it natively. img_out is RGB; imencode wants BGR.
+        if (pub_det_image_ && detection_img_pub_) {
+            cv::Mat img_bgr;
+            cv::cvtColor(img_out, img_bgr, cv::COLOR_RGB2BGR);
+            std::vector<uchar> buf;
+            std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+            if (cv::imencode(".jpg", img_bgr, buf, params)) {
+                sensor_msgs::msg::CompressedImage cmsg;
+                cmsg.header = detection_msg.header;
+                cmsg.format = "jpeg";
+                cmsg.data = std::move(buf);
+                detection_img_pub_->publish(cmsg);
+            }
+        }
     }
 
     if (save_data_) {

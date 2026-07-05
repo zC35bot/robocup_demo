@@ -57,6 +57,7 @@ private:
     bool use_depth_ = false;
     bool show_det_ = false;
     bool show_seg_ = false;
+    bool pub_det_image_ = false;
     bool save_data_ = false;
     bool save_depth_ = false;
     bool offline_mode_ = false;
@@ -94,7 +95,7 @@ private:
     rclcpp::Publisher<vision_interface::msg::LineSegments>::SharedPtr field_line_pub_;
     rclcpp::Publisher<vision_interface::msg::Ball>::SharedPtr ball_pub_;
 
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr detection_img_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr detection_img_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr segmentation_img_pub_;
 
     rclcpp::Publisher<geometry_msgs::msg::TransformStamped>::SharedPtr pose_tf_pub_;

@@ -23,6 +23,7 @@ def handle_configuration(context, *args, **kwargs):
 
     show_det = LaunchConfiguration('show_det')
     show_seg = LaunchConfiguration('show_seg')
+    pub_det_image = LaunchConfiguration('pub_det_image')
     save_data = LaunchConfiguration('save_data')
     save_depth = LaunchConfiguration('save_depth')
     offline_mode = LaunchConfiguration('offline_mode')
@@ -45,6 +46,7 @@ def handle_configuration(context, *args, **kwargs):
                 'offline_mode': offline_mode,
                 'show_det': show_det,
                 'show_seg': show_seg,
+                'pub_det_image': pub_det_image,
                 'save_data': save_data,
                 'save_depth': save_depth,
                 'save_fps': save_fps,
@@ -79,6 +81,11 @@ def generate_launch_description():
             "show_seg",
             default_value='false',
             description="Show segmentation result"
+        ),
+        DeclareLaunchArgument(
+            "pub_det_image",
+            default_value='false',
+            description="Publish annotated detection frame as CompressedImage on /booster_soccer/detection_image (for remote viewers like Foxglove)"
         ),
         DeclareLaunchArgument(
             "save_data",
